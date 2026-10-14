@@ -1,0 +1,11 @@
+{
+  "name": "tab-thrashing",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Browser tabs as virtual memory: a live page-replacement study of your own tab switching.",
+  "scripts": {
+    "start": "node live/server.js",
+    "crosscheck": "node sim/crosscheck.js",
+    "build-lab": "node lab/build.js"
+  }
+}

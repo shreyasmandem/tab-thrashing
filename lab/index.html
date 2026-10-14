@@ -1,0 +1,1075 @@
+<meta charset="utf-8">
+<title>Tab Thrashing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=JetBrains+Mono:wght@400;500;700&family=Public+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: a memory-map instrument. Sticky control bus on top; findings first, then instrument panels on a 12-col grid. */
+:root{
+  --bg:#EDF0F5; --surface:#FFFFFF; --sunk:#E4E9F0; --ink:#0D1829; --muted:#556277; --faint:#8592A6; --line:#D4DBE5;
+  --accent:#2846E8; --accent-soft:rgba(40,70,232,.10); --fault:#E5484D; --fault-soft:rgba(229,72,77,.14); --hit:#0F9A72; --hit-soft:rgba(15,154,114,.13);
+  --s-opt:#0D1829; --s-lru:#2846E8; --s-clock:#0A8F84; --s-lfu:#8A3FD6; --s-fifo:#DC6A08; --s-rand:#98A2B3; --s-ws:#D6337C;
+  --tab-s:66%; --tab-l:58%;
+  --shadow:0 1px 0 rgba(13,24,41,.04), 0 8px 24px -12px rgba(13,24,41,.18);
+  --f-display:"Bricolage Grotesque","Segoe UI",system-ui,sans-serif;
+  --f-body:"Public Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,Consolas,"SFMono-Regular",monospace;
+  --r:12px; --gut:clamp(16px,3.2vw,40px);
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#080D16; --surface:#101826; --sunk:#0C131F; --ink:#E6ECF5; --muted:#93A0B5; --faint:#647187; --line:#1F2B3F;
+  --accent:#7389FF; --accent-soft:rgba(115,137,255,.14); --fault:#FF6B70; --fault-soft:rgba(255,107,112,.16); --hit:#3BD3A0; --hit-soft:rgba(59,211,160,.14);
+  --s-opt:#E6ECF5; --s-lru:#7389FF; --s-clock:#2CC9BA; --s-lfu:#B585FF; --s-fifo:#FF9B40; --s-rand:#5E6B82; --s-ws:#FF6FAE;
+  --tab-s:60%; --tab-l:56%; --shadow:0 1px 0 rgba(0,0,0,.3), 0 10px 30px -14px rgba(0,0,0,.7); color-scheme:dark;}}
+:root[data-theme="dark"]{
+  --bg:#080D16; --surface:#101826; --sunk:#0C131F; --ink:#E6ECF5; --muted:#93A0B5; --faint:#647187; --line:#1F2B3F;
+  --accent:#7389FF; --accent-soft:rgba(115,137,255,.14); --fault:#FF6B70; --fault-soft:rgba(255,107,112,.16); --hit:#3BD3A0; --hit-soft:rgba(59,211,160,.14);
+  --s-opt:#E6ECF5; --s-lru:#7389FF; --s-clock:#2CC9BA; --s-lfu:#B585FF; --s-fifo:#FF9B40; --s-rand:#5E6B82; --s-ws:#FF6FAE;
+  --tab-s:60%; --tab-l:56%; --shadow:0 1px 0 rgba(0,0,0,.3), 0 10px 30px -14px rgba(0,0,0,.7); color-scheme:dark;}
+
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1260px;margin:0 auto;padding-inline:var(--gut)}
+h1,h2,h3{font-family:var(--f-display);margin:0;text-wrap:balance;letter-spacing:-.02em}
+p{margin:0}
+.mono,code,.num{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+.eyebrow{font-family:var(--f-mono);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+button,select,input{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+
+/* ---------- top bar ---------- */
+.top{display:flex;align-items:center;justify-content:space-between;gap:16px;padding-block:18px}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--f-display);font-weight:800;font-size:17px;letter-spacing:-.01em}
+.brand-mark{display:grid;grid-template-columns:repeat(3,7px);gap:2px}
+.brand-mark i{width:7px;height:7px;border-radius:2px;background:var(--accent);opacity:.25}
+.brand-mark i.on{opacity:1}.brand-mark i.f{background:var(--fault);opacity:1}
+.top nav{display:flex;gap:18px;flex-wrap:wrap;font-size:13px}
+.top nav a{color:var(--muted);text-decoration:none}.top nav a:hover{color:var(--ink)}
+
+/* ---------- hero ---------- */
+.hero{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:clamp(24px,4vw,56px);align-items:start;padding-block:clamp(20px,4vw,48px) 36px}
+.hero h1{font-size:clamp(2.3rem,4.8vw,4.15rem);line-height:1.0;font-weight:800;margin-top:14px}
+.hero h1 span{color:var(--accent)}
+.lede{margin-top:20px;font-size:17px;line-height:1.6;color:var(--muted);max-width:56ch}
+.lede b{color:var(--ink);font-weight:600}
+.kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;margin-top:28px;background:var(--line);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.kpi{background:var(--surface);padding:14px 16px;min-width:0}
+.kpi .v{font-family:var(--f-display);font-weight:700;font-size:clamp(22px,2.6vw,30px);letter-spacing:-.02em;line-height:1.1;margin-top:6px}
+.kpi .v small{font-size:.5em;font-weight:500;color:var(--muted);letter-spacing:0;margin-left:4px}
+.kpi .s{font-size:12px;color:var(--muted);margin-top:4px}
+
+/* the machine */
+.machine{background:var(--surface);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);overflow:hidden}
+.m-head{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.m-head .t{font-family:var(--f-mono);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-right:auto}
+.m-head .t b{color:var(--ink);font-weight:500}
+.btn{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:6px 11px;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.btn:hover{border-color:var(--faint)}
+.btn.primary{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.tape{display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--sunk);border-bottom:1px solid var(--line);overflow:hidden}
+.tape-l{font-family:var(--f-mono);font-size:10.5px;color:var(--faint);letter-spacing:.08em;text-transform:uppercase;flex:none}
+.chips{display:flex;gap:6px;overflow:hidden;-webkit-mask-image:linear-gradient(90deg,#000 75%,transparent);mask-image:linear-gradient(90deg,#000 75%,transparent)}
+.chip{flex:none;display:inline-flex;align-items:center;gap:6px;padding:4px 8px 4px 6px;border-radius:7px;background:var(--surface);border:1px solid var(--line);font-size:12px;white-space:nowrap}
+.chip i{width:8px;height:8px;border-radius:2px;flex:none}
+.chip.now{border-color:var(--ink);box-shadow:0 0 0 1px var(--ink)}
+.frames{list-style:none;margin:0;padding:10px;display:grid;gap:6px}
+.frame{display:grid;grid-template-columns:34px 10px minmax(0,1fr) auto;align-items:center;gap:10px;padding:9px 12px;border-radius:9px;border:1px solid var(--line);background:var(--surface);transition:background .35s,border-color .35s;min-height:42px}
+.frame .ix{font-family:var(--f-mono);font-size:11px;color:var(--faint)}
+.frame .sw{width:10px;height:22px;border-radius:3px}
+.frame .lb{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.frame .mt{font-family:var(--f-mono);font-size:11.5px;color:var(--muted);white-space:nowrap}
+.frame.empty .lb{color:var(--faint);font-weight:400}
+.frame.hit{background:var(--hit-soft);border-color:var(--hit)}
+.frame.fault{background:var(--fault-soft);border-color:var(--fault);animation:jolt .45s ease}
+.frame.hand .ix::after{content:" \25C0";color:var(--s-clock)}
+@keyframes jolt{0%{transform:translateX(0)}25%{transform:translateX(-4px)}55%{transform:translateX(3px)}100%{transform:translateX(0)}}
+.m-foot{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border-top:1px solid var(--line)}
+.m-foot div{padding:10px 14px;border-right:1px solid var(--line);min-width:0}
+.m-foot div:last-child{border-right:0}
+.m-foot .n{font-family:var(--f-mono);font-weight:500;font-size:17px}
+.m-foot .l{font-size:11px;color:var(--muted)}
+.m-event{padding:10px 14px;border-top:1px solid var(--line);font-size:13px;color:var(--muted);min-height:42px}
+.m-event b{color:var(--ink);font-weight:600}
+.tag{display:inline-block;font-family:var(--f-mono);font-size:10.5px;font-weight:700;letter-spacing:.06em;padding:2px 6px;border-radius:5px;margin-right:6px;vertical-align:1px}
+.tag.hit{background:var(--hit-soft);color:var(--hit)}.tag.fault{background:var(--fault-soft);color:var(--fault)}.tag.new{background:var(--accent-soft);color:var(--accent)}
+
+/* ---------- control bus ---------- */
+.bus{position:relative;z-index:20;background:color-mix(in srgb,var(--bg) 86%,transparent);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-block:1px solid var(--line)}
+.bus .wrap{display:flex;align-items:center;gap:14px 22px;flex-wrap:wrap;padding-block:10px}
+.seg{display:inline-flex;background:var(--sunk);border:1px solid var(--line);border-radius:10px;padding:3px;gap:2px;flex-wrap:wrap}
+.seg button{border:0;background:transparent;padding:6px 12px;border-radius:7px;cursor:pointer;font-size:13.5px;color:var(--muted)}
+.seg button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08),0 0 0 1px var(--line)}
+.ctl{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--muted)}
+.ctl output{font-family:var(--f-mono);color:var(--ink);font-weight:500;min-width:2.2ch;display:inline-block}
+input[type=range]{accent-color:var(--accent);width:150px}
+select{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:13px}
+.datachip{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--s-fifo);box-shadow:0 0 0 3px color-mix(in srgb,var(--s-fifo) 25%,transparent)}
+.dot.real{background:var(--hit);box-shadow:0 0 0 3px var(--hit-soft)}
+.upload{cursor:pointer}
+.upload input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+
+/* ---------- sections ---------- */
+section.block{padding-block:clamp(36px,5vw,64px) 0}
+.sh{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px 40px;align-items:end;margin-bottom:20px}
+.sh h2{font-size:clamp(1.6rem,2.8vw,2.3rem);font-weight:700;line-height:1.08;margin-top:8px}
+.sh p{color:var(--muted);max-width:62ch}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:18px;min-width:0}
+.panel-h{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.panel-h h3{font-size:16px;font-weight:700;letter-spacing:-.01em}
+.panel-h .sub{font-size:12.5px;color:var(--muted)}
+.grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
+.grid-73{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(0,1fr);gap:16px}
+
+/* findings */
+.qs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
+.q{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:18px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.q .qn{display:flex;justify-content:space-between;align-items:center}
+.q .qn span:first-child{font-family:var(--f-mono);font-size:11.5px;color:var(--faint)}
+.pill{font-family:var(--f-mono);font-size:10.5px;font-weight:700;letter-spacing:.05em;padding:3px 8px;border-radius:999px;text-transform:uppercase}
+.pill.yes{background:var(--hit-soft);color:var(--hit)}.pill.no{background:var(--fault-soft);color:var(--fault)}.pill.mixed{background:color-mix(in srgb,var(--s-fifo) 16%,transparent);color:var(--s-fifo)}
+.q h3{font-size:15.5px;font-weight:700;line-height:1.3;letter-spacing:-.005em}
+.q .big{font-family:var(--f-display);font-weight:800;font-size:34px;letter-spacing:-.03em;line-height:1}
+.q .big small{font-size:14px;font-weight:500;color:var(--muted);letter-spacing:0;margin-left:4px}
+.q p{font-size:13px;color:var(--muted)}
+.minirow{display:flex;gap:6px;flex-wrap:wrap;margin-top:auto}
+.mini{font-family:var(--f-mono);font-size:11px;padding:3px 7px;border-radius:6px;background:var(--sunk);color:var(--muted)}
+.mini b{color:var(--ink);font-weight:500}
+
+/* charts */
+.chart{display:block;width:100%;height:auto;overflow:visible}
+.ax text{fill:var(--muted);font-family:var(--f-mono);font-size:11px}
+.ax .ttl{fill:var(--faint);font-size:10.5px;letter-spacing:.06em}
+.ax line.g{stroke:var(--line);stroke-width:1}
+.ax line.base{stroke:var(--faint);stroke-width:1}
+.series{fill:none;stroke-width:2.2;stroke-linejoin:round;stroke-linecap:round;transition:opacity .2s}
+.legend{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.lg{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:4px 10px 4px 8px;font-size:12.5px;cursor:pointer}
+.lg i{width:14px;height:3px;border-radius:2px}
+.lg[aria-pressed="false"]{opacity:.42}
+.lg[aria-pressed="false"] i{background:var(--faint)!important}
+.note{font-size:12.5px;color:var(--muted);margin-top:10px}
+.cv{display:block;width:100%;touch-action:pan-y}
+.scrollx{overflow-x:auto}
+.legend-inline{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:10px}
+.legend-inline span{display:inline-flex;align-items:center;gap:6px}
+.legend-inline i{width:10px;height:10px;border-radius:2px;display:inline-block}
+
+/* leaderboard */
+table.board{width:100%;border-collapse:collapse;font-size:13.5px;min-width:720px}
+.board th{font-family:var(--f-mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);font-weight:500;text-align:right;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+.board th:nth-child(-n+2){text-align:left}
+.board td{padding:11px 10px;border-bottom:1px solid var(--line);text-align:right;font-family:var(--f-mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.board td:nth-child(2){text-align:left;font-family:var(--f-body)}
+.board td:first-child{text-align:left;color:var(--faint)}
+.board tr:last-child td{border-bottom:0}
+.pol{display:flex;align-items:center;gap:10px}
+.pol i{width:4px;height:26px;border-radius:2px;flex:none}
+.pol b{font-weight:600;display:block}
+.pol span{font-size:12px;color:var(--muted)}
+.bar{display:inline-block;height:6px;border-radius:3px;background:var(--fault);vertical-align:middle;margin-left:8px;opacity:.8}
+.rk{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:6px;font-size:11.5px;font-weight:700}
+.matrix{display:grid;gap:4px;font-size:12px}
+.matrix .c{padding:8px;border-radius:7px;text-align:center;font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+.matrix .h{font-family:var(--f-mono);font-size:10.5px;color:var(--faint);letter-spacing:.06em;text-transform:uppercase;padding:6px 4px;text-align:center}
+.matrix .rh{text-align:left;font-family:var(--f-body);font-weight:600;display:flex;align-items:center;gap:8px;padding:8px 4px}
+.matrix .rh i{width:4px;height:16px;border-radius:2px}
+
+/* belady */
+.bgrid{border-collapse:separate;border-spacing:3px;font-family:var(--f-mono);font-size:12px}
+.bgrid th{font-weight:500;color:var(--faint);padding:2px 0;width:28px}
+.bgrid td{width:28px;height:26px;text-align:center;border-radius:5px;background:var(--sunk);color:var(--muted)}
+.bgrid td.ld{background:var(--accent-soft);color:var(--ink)}
+.bgrid td.flt{background:var(--fault);color:#fff;font-weight:700}
+.bgrid tr.fr td{background:transparent;height:18px;font-size:10px;color:var(--fault)}
+.bel-n{font-family:var(--f-display);font-weight:800;font-size:28px;letter-spacing:-.02em}
+.anom td,.anom th{padding:7px 10px;border-bottom:1px solid var(--line);font-family:var(--f-mono);font-size:12.5px;text-align:right}
+.anom th{font-size:10.5px;color:var(--faint);letter-spacing:.06em;text-transform:uppercase;font-weight:500}
+.anom td:first-child,.anom th:first-child{text-align:left;font-family:var(--f-body)}
+.anom{border-collapse:collapse;width:100%}
+.anom tr:last-child td{border-bottom:0}
+
+/* method */
+.steps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
+.step{border-top:2px solid var(--ink);padding-top:12px}
+.step .sn{font-family:var(--f-mono);font-size:11.5px;color:var(--faint)}
+.step h3{font-size:16px;font-weight:700;margin:6px 0}
+.step p{font-size:13.5px;color:var(--muted)}
+pre.code{margin:0;background:var(--sunk);border:1px solid var(--line);border-radius:10px;padding:14px;font-family:var(--f-mono);font-size:12px;line-height:1.6;overflow-x:auto;color:var(--ink)}
+.k{color:var(--accent)}.c{color:var(--faint)}
+footer{padding-block:56px 40px;color:var(--faint);font-size:12.5px;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+
+/* tooltip */
+#tip{position:fixed;z-index:50;pointer-events:none;background:var(--ink);color:var(--bg);border-radius:9px;padding:9px 11px;font-size:12px;line-height:1.45;max-width:280px;box-shadow:0 10px 30px -10px rgba(0,0,0,.5)}
+#tip .tr{display:flex;justify-content:space-between;gap:14px;font-family:var(--f-mono)}
+#tip .tt{font-weight:600;margin-bottom:4px;font-family:var(--f-body)}
+#tip i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px}
+.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;font-size:13px;z-index:60}
+
+@media (min-width:900px){.bus{position:sticky;top:env(safe-area-inset-top,0px)}}
+@media (max-width:1020px){
+  .hero{grid-template-columns:minmax(0,1fr)}
+  .qs{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .steps{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .grid-73,.grid2,.sh{grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width:620px){
+  .qs,.steps{grid-template-columns:minmax(0,1fr)}
+  .kpis{grid-template-columns:minmax(0,1fr)}
+  .top nav{display:none}
+  .datachip{margin-left:0}
+  .m-foot{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .m-foot div:nth-child(2){border-right:0}
+  .m-foot div:nth-child(-n+2){border-bottom:1px solid var(--line)}
+  input[type=range]{width:110px}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<header class="wrap top">
+  <div class="brand"><span class="brand-mark" aria-hidden="true"><i class="on"></i><i class="on"></i><i></i><i class="on"></i><i class="f"></i><i class="on"></i><i></i><i class="on"></i><i class="on"></i></span>Tab Thrashing</div>
+  <nav aria-label="Sections"><a href="#findings">Findings</a><a href="#curves">Fault curves</a><a href="#timeline">Timeline</a><a href="#workingset">Working set</a><a href="#belady">Belady</a><a href="#method">Method</a></nav>
+</header>
+
+<main>
+<section class="wrap hero">
+  <div>
+    <p class="eyebrow">Operating systems · memory management · page replacement</p>
+    <h1>Your browser is an operating system. <span>Your tabs are its pages.</span></h1>
+    <p class="lede">When RAM runs short, browsers discard background tabs. Switching back to one forces a reload: a <b>page fault</b> that costs a human seconds instead of a CPU microseconds. This lab replays tab-switch traces through six classic replacement policies and Denning's working-set model to measure which one predicts attention best, and how many live tabs a person needs before they start to <b>thrash</b>.</p>
+    <div class="kpis" id="kpis"></div>
+  </div>
+  <div class="machine" aria-label="Live page replacement simulation">
+    <div class="m-head">
+      <span class="t">Physical memory · <b id="mAlgo">LRU</b> · <b id="mK">5</b> frames</span>
+      <button class="btn" id="mPlay" type="button">Pause</button>
+      <button class="btn" id="mStep" type="button">Step</button>
+    </div>
+    <div class="tape"><span class="tape-l">Next<br>switches</span><div class="chips" id="tape"></div></div>
+    <ol class="frames" id="frames"></ol>
+    <div class="m-foot">
+      <div><div class="n" id="cSw">0</div><div class="l">tab switches</div></div>
+      <div><div class="n" id="cHit">0</div><div class="l">hits</div></div>
+      <div><div class="n" id="cFlt" style="color:var(--fault)">0</div><div class="l">refaults (reloads)</div></div>
+      <div><div class="n" id="cRate">0.0</div><div class="l">refaults / 100 switches</div></div>
+    </div>
+    <p class="m-event" id="mEvent" aria-live="polite">Replaying the trace…</p>
+  </div>
+</section>
+
+<div class="bus" role="region" aria-label="Simulation controls">
+  <div class="wrap">
+    <div class="seg" id="personas" role="group" aria-label="Trace"></div>
+    <label class="ctl" for="kSlider">Live tabs (frames) <input id="kSlider" type="range" min="1" max="32" value="6"> <output id="kOut">6</output></label>
+    <label class="ctl" for="algoSel">Policy <select id="algoSel"></select></label>
+    <label class="btn upload" for="fileIn">Load trace (.json)<input id="fileIn" type="file" accept=".json,application/json"></label>
+    <span class="datachip"><span class="dot" id="dataDot"></span><span id="dataTxt">Synthetic traces from a seeded locality model</span></span>
+  </div>
+</div>
+
+<section class="wrap block" id="findings">
+  <div class="sh">
+    <div><p class="eyebrow">Research questions</p><h2>What the traces say</h2></div>
+    <p id="personaBlurb"></p>
+  </div>
+  <div class="qs" id="qs"></div>
+</section>
+
+<section class="wrap block" id="curves">
+  <div class="sh">
+    <div><p class="eyebrow">Page-fault frequency</p><h2>Fault rate against live tabs</h2></div>
+    <p>Each line replays the same trace with a fixed number of live tabs. First visits are excluded, so the y-axis counts only <b>refaults</b>: reloads of tabs the user had already seen. The knee of the LRU curve is the thrashing point. Below it, every tab you remove costs sharply more reloads.</p>
+  </div>
+  <div class="panel">
+    <div class="legend" id="legend"></div>
+    <div id="curveChart"></div>
+    <p class="note" id="curveNote"></p>
+  </div>
+</section>
+
+<section class="wrap block" id="board">
+  <div class="sh">
+    <div><p class="eyebrow">Policy comparison</p><h2>Leaderboard at <span id="boardK">6</span> live tabs</h2></div>
+    <p>Cost converts refaults into human time with a 2.4 s average reload. Memory freed is the average number of tabs kept discarded, at 180 MB per tab, a typical figure for a modern content process.</p>
+  </div>
+  <div class="grid-73">
+    <div class="panel scrollx"><table class="board" id="boardTbl"></table></div>
+    <div class="panel">
+      <div class="panel-h"><h3>Rank by persona</h3><span class="sub">each at its own thrashing point</span></div>
+      <div class="matrix" id="matrix"></div>
+      <p class="note">1 is the fewest refaults. OPT is excluded because it needs to know the future.</p>
+    </div>
+  </div>
+</section>
+
+<section class="wrap block" id="timeline">
+  <div class="sh">
+    <div><p class="eyebrow">Frame allocation table</p><h2>Every frame, every switch</h2></div>
+    <p>The textbook page-replacement table, drawn at full scale. Rows are frames, columns are tab switches, and each colour is one tab. Red ticks on the top lane are refaults; grey ticks are first visits. Drag the overview strip to move through the session.</p>
+  </div>
+  <div class="panel">
+    <div class="panel-h"><h3 id="tlTitle">LRU</h3><span class="sub" id="tlSub"></span></div>
+    <canvas class="cv" id="tl" aria-label="Frame allocation over time"></canvas>
+    <canvas class="cv" id="tlMini" style="margin-top:10px;cursor:grab" aria-label="Fault density overview; drag to scroll"></canvas>
+    <div class="legend-inline"><span><i style="background:var(--fault)"></i>refault (reload of a discarded tab)</span><span><i style="background:var(--faint)"></i>first visit</span><span><i style="outline:2px solid var(--ink);outline-offset:-2px"></i>tab just loaded into this frame</span></div>
+  </div>
+</section>
+
+<section class="wrap block" id="workingset">
+  <div class="sh">
+    <div><p class="eyebrow">Denning's working set W(t, Δ)</p><h2>When attention outgrows memory</h2></div>
+    <p>The working set is every tab touched in the last Δ switches. Wherever it rises above the frame budget, the session is in a thrashing zone: the user needs more tabs than the browser keeps alive, so reloads cluster.</p>
+  </div>
+  <div class="panel">
+    <div class="panel-h">
+      <h3>Working set over the session</h3>
+      <label class="ctl" for="dSlider">Window Δ <input id="dSlider" type="range" min="4" max="120" value="30"> <output id="dOut">30</output> switches</label>
+    </div>
+    <div id="wsChart"></div>
+    <div class="legend-inline"><span><i style="background:var(--s-ws)"></i>working-set size</span><span><i style="background:var(--sunk);outline:1px solid var(--line)"></i>tabs open</span><span><i style="background:var(--accent)"></i>live-tab budget k</span><span><i style="background:var(--fault-soft);outline:1px solid var(--fault)"></i>thrashing zone (W &gt; k)</span></div>
+  </div>
+</section>
+
+<section class="wrap block" id="locality">
+  <div class="sh">
+    <div><p class="eyebrow">Locality of reference</p><h2>Do people behave like programs?</h2></div>
+    <p>Programs reuse a small set of pages for a while, then move on. If people do the same with tabs, recency-based policies should work. The raster shows each tab's visits over time; the histogram counts how many other tabs were visited between returns to the same tab.</p>
+  </div>
+  <div class="grid2">
+    <div class="panel">
+      <div class="panel-h"><h3>Reference raster</h3><span class="sub">one row per tab, in order of first visit</span></div>
+      <canvas class="cv" id="raster" aria-label="Tab visits over time"></canvas>
+      <div class="legend-inline"><span><i style="background:var(--muted)"></i>visit (coloured by tab)</span><span><i style="background:var(--fault)"></i>refault under the selected policy</span></div>
+    </div>
+    <div class="panel">
+      <div class="panel-h"><h3>LRU stack distance</h3><span class="sub">bars: share of returns · line: cumulative hit rate</span></div>
+      <div id="histChart"></div>
+      <p class="note">The cumulative line is exactly LRU's hit rate at each frame count (Mattson's stack algorithm). The simulator reproduces it hit for hit.</p>
+    </div>
+  </div>
+</section>
+
+<section class="wrap block" id="belady">
+  <div class="sh">
+    <div><p class="eyebrow">Belady's anomaly</p><h2>More memory, more faults</h2></div>
+    <p>FIFO can fault more with more frames. The classic reference string shows it: 9 faults with 3 frames, 10 with 4. Stack algorithms such as LRU and OPT are immune. The table on the right counts how often each policy's fault count rises when a live tab is added.</p>
+  </div>
+  <div class="grid-73">
+    <div class="panel scrollx" id="belGrids"></div>
+    <div class="panel">
+      <div class="panel-h"><h3>Anomalies in the traces</h3><span class="sub">steps from k to k+1 where faults rose</span></div>
+      <table class="anom" id="anomTbl"></table>
+    </div>
+  </div>
+</section>
+
+<section class="wrap block" id="method">
+  <div class="sh">
+    <div><p class="eyebrow">Study design</p><h2>From your browser to a fault curve</h2></div>
+    <p>The companion extension records tab switches and closes, never page content or full URLs. Hostnames are hashed by default. Export the log and drop it on this page with <b>Load trace</b>; every chart recomputes from your own data.</p>
+  </div>
+  <div class="steps">
+    <div class="step"><div class="sn">Step 1</div><h3>Log</h3><p>A Manifest V3 extension listens to tab activate, create and remove events and stores them with timestamps. It also flags switches into tabs the browser had already discarded: real, measured page faults.</p></div>
+    <div class="step"><div class="sn">Step 2</div><h3>Normalise</h3><p>Activations become a reference string. Closes free their frame. First visits are compulsory misses and are kept out of the refault rate.</p></div>
+    <div class="step"><div class="sn">Step 3</div><h3>Replay</h3><p>Each policy runs at every frame count from 1 to 32, plus the working set across 21 window sizes. A Python port validates the JavaScript results against each other.</p></div>
+    <div class="step"><div class="sn">Step 4</div><h3>Compare</h3><p>Find the knee with the Kneedle method, rank policies per user, test for Belady's anomaly, and optionally run the winner live with the extension's discard mode.</p></div>
+  </div>
+  <div class="grid2" style="margin-top:24px">
+    <div class="panel">
+      <div class="panel-h"><h3>Trace format</h3><span class="sub">tab-thrashing/v1</span></div>
+<pre class="code">{
+  <span class="k">"format"</span>: "tab-thrashing/v1",
+  <span class="k">"events"</span>: [
+    { "t": 0,    "type": "activate", "tab": 812, "label": "site-3fa2" },
+    { "t": 14.2, "type": "activate", "tab": 640, "label": "site-91c0" },
+    { "t": 31.9, "type": "close",    "tab": 812 },
+    { "t": 40.5, "type": "activate", "tab": 640, "faulted": true }
+  ]
+}</pre>
+      <p class="note"><code>t</code> is seconds from the start. <code>faulted</code> marks a switch into a tab the browser had really discarded.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-h"><h3>Definitions</h3></div>
+      <dl style="margin:0;display:grid;gap:10px;font-size:13.5px">
+        <div><dt style="font-weight:600">Frame</dt><dd style="margin:0;color:var(--muted)">A tab the browser keeps alive in memory. k is the budget of live tabs.</dd></div>
+        <div><dt style="font-weight:600">Refault rate</dt><dd style="margin:0;color:var(--muted)">Reloads of previously seen tabs per 100 tab switches. This is the study's human page-fault rate.</dd></div>
+        <div><dt style="font-weight:600">Thrashing point</dt><dd style="margin:0;color:var(--muted)">The knee of the LRU refault curve: the farthest point below the chord between k = 1 and k = 32.</dd></div>
+        <div><dt style="font-weight:600">Synthetic personas</dt><dd style="margin:0;color:var(--muted)">Seeded generators with anchor tabs, Zipf recency within phases, phase shifts, new-tab bursts and closes. They demonstrate the method; real logs replace them.</dd></div>
+      </dl>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer class="wrap"><span>Tab Thrashing · an operating-systems study of browser tab replacement</span><span>OPT · LRU · Clock · LFU · FIFO · Random · Working set</span></footer>
+<div id="tip" hidden></div>
+
+<script src="core.js"></script>
+<script>
+(function(){
+'use strict';
+const T = window.TT;
+const $ = (s, r = document) => r.querySelector(s);
+const NS = 'http://www.w3.org/2000/svg';
+const RELOAD_S = 2.4, TAB_MB = 180;
+
+const ALGOS = [
+  { id:'opt',   name:'OPT',    full:"Belady's optimal",       color:'--s-opt',   dash:'6 5', note:'Evicts the tab used furthest in the future. Needs to know the future, so it is the lower bound.' },
+  { id:'lru',   name:'LRU',    full:'Least recently used',    color:'--s-lru',   note:'Evicts the tab you looked at longest ago.' },
+  { id:'clock', name:'Clock',  full:'Second chance',          color:'--s-clock', note:'A hand sweeps the frames; a recently used tab gets one reprieve.' },
+  { id:'lfu',   name:'LFU',    full:'Least frequently used',  color:'--s-lfu',   note:'Evicts the tab with the fewest visits this session.' },
+  { id:'fifo',  name:'FIFO',   full:'First in, first out',    color:'--s-fifo',  note:'Evicts the tab that has been loaded longest.' },
+  { id:'rand',  name:'Random', full:'Random eviction',        color:'--s-rand',  dash:'2 4', note:'Baseline. A policy worse than this is broken.' },
+];
+const AL = Object.fromEntries(ALGOS.map(a => [a.id, a]));
+const PRACTICAL = ALGOS.filter(a => a.id !== 'opt');
+
+/* ---------- data ---------- */
+const DATA = {};
+const ORDER = [];
+for (const [id, P] of Object.entries(T.PERSONAS)) {
+  const tr = T.generateTrace(P);
+  DATA[id] = T.prepare(P.name, tr.events, tr.labels);
+  DATA[id].blurb = P.blurb;
+  DATA[id].synthetic = true;
+  ORDER.push(id);
+}
+
+let saved = {};
+try { saved = JSON.parse(localStorage.getItem('tt-state') || '{}'); } catch (e) {}
+const state = { persona: DATA[saved.persona] ? saved.persona : 'researcher', k: saved.k || 8, algo: AL[saved.algo] ? saved.algo : 'lru', delta: saved.delta || 10, hidden: new Set() };
+const persist = () => { try { localStorage.setItem('tt-state', JSON.stringify({ persona: state.persona, k: state.k, algo: state.algo, delta: state.delta })); } catch (e) {} };
+const D = () => DATA[state.persona];
+
+/* ---------- theme ---------- */
+let TC = {};
+function readTheme() {
+  const cs = getComputedStyle(document.documentElement);
+  const g = n => cs.getPropertyValue(n).trim();
+  TC = { bg:g('--bg'), surface:g('--surface'), sunk:g('--sunk'), ink:g('--ink'), muted:g('--muted'), faint:g('--faint'), line:g('--line'), accent:g('--accent'), fault:g('--fault'), hit:g('--hit'), ts:g('--tab-s'), tl:g('--tab-l') };
+}
+const tabColor = (id, a = 1) => `hsla(${((id * 137.508) + 205) % 360},${TC.ts},${TC.tl},${a})`;
+const sc = id => `var(${AL[id].color})`;
+
+/* ---------- utils ---------- */
+function S(tag, attrs, parent) { const e = document.createElementNS(NS, tag); if (attrs) for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+function niceTicks(min, max, n) {
+  const span = max - min || 1, s0 = span / n, mag = Math.pow(10, Math.floor(Math.log10(s0))), e = s0 / mag;
+  const step = (e >= 7.5 ? 10 : e >= 3.5 ? 5 : e >= 1.5 ? 2 : 1) * mag, out = [];
+  for (let v = Math.ceil(min / step) * step; v <= max + 1e-9; v += step) out.push(+v.toFixed(8));
+  return out;
+}
+const fmt1 = v => (Math.round(v * 10) / 10).toFixed(1);
+const fmtDur = s => { s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return h ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m ${String(s % 60).padStart(2, '0')}s`; };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+const tip = $('#tip');
+function showTip(html, x, y) {
+  tip.innerHTML = html; tip.hidden = false;
+  const r = tip.getBoundingClientRect();
+  let L = x + 16, Tp = y + 16;
+  if (L + r.width > innerWidth - 8) L = x - r.width - 16;
+  if (Tp + r.height > innerHeight - 8) Tp = y - r.height - 16;
+  tip.style.left = Math.max(8, L) + 'px'; tip.style.top = Math.max(8, Tp) + 'px';
+}
+const hideTip = () => { tip.hidden = true; };
+function setupCanvas(cv, w, h) {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  cv.style.height = h + 'px';
+  const ctx = cv.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
+  return ctx;
+}
+
+function axes(el, o) {
+  el.innerHTML = '';
+  const W = Math.max(300, el.clientWidth), h = o.h, m = o.m;
+  const svg = S('svg', { viewBox:`0 0 ${W} ${h}`, width:W, height:h, class:'chart', role:'img', 'aria-label':o.label || '' }, el);
+  const pw = W - m.l - m.r, ph = h - m.t - m.b;
+  const x = v => m.l + (v - o.xd[0]) / (o.xd[1] - o.xd[0]) * pw;
+  const y = v => m.t + ph - (v - o.yd[0]) / (o.yd[1] - o.yd[0]) * ph;
+  const ax = S('g', { class:'ax' }, svg);
+  for (const t of o.yt) {
+    S('line', { x1:m.l, x2:W - m.r, y1:y(t), y2:y(t), class: t === o.yd[0] ? 'base' : 'g' }, ax);
+    S('text', { x:m.l - 8, y:y(t) + 4, 'text-anchor':'end' }, ax).textContent = (o.yf || String)(t);
+  }
+  for (const t of o.xt) S('text', { x:x(t), y:h - m.b + 18, 'text-anchor':'middle' }, ax).textContent = (o.xf || String)(t);
+  if (o.xl) S('text', { x:W - m.r, y:h - 4, 'text-anchor':'end', class:'ttl' }, ax).textContent = o.xl;
+  if (o.yl) S('text', { x:m.l, y:m.t - 10, 'text-anchor':'start', class:'ttl' }, ax).textContent = o.yl;
+  return { svg, x, y, W, h, m, pw, ph };
+}
+const pathOf = pts => pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join('');
+
+/* ---------- controls ---------- */
+function buildPersonaButtons() {
+  const box = $('#personas'); box.innerHTML = '';
+  for (const id of ORDER) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = DATA[id].name; b.setAttribute('aria-pressed', id === state.persona);
+    b.onclick = () => { state.persona = id; onPersona(); };
+    box.appendChild(b);
+  }
+}
+const algoSel = $('#algoSel');
+for (const a of ALGOS) { const o = document.createElement('option'); o.value = a.id; o.textContent = `${a.name} · ${a.full}`; algoSel.appendChild(o); }
+algoSel.value = state.algo;
+algoSel.onchange = () => { state.algo = algoSel.value; persist(); renderDynamic(); hero.reset(); };
+const kSlider = $('#kSlider'), kOut = $('#kOut');
+kSlider.oninput = () => { state.k = +kSlider.value; kOut.textContent = state.k; persist(); renderDynamic(); hero.reset(); };
+const dSlider = $('#dSlider'), dOut = $('#dOut');
+dSlider.value = state.delta; dOut.textContent = state.delta;
+dSlider.oninput = () => { state.delta = +dSlider.value; dOut.textContent = state.delta; persist(); renderWS(); };
+
+function onPersona() {
+  const d = D();
+  T.analyze(d);
+  kSlider.max = d.K;
+  if (state.k > d.K) state.k = d.K;
+  kSlider.value = state.k; kOut.textContent = state.k;
+  [...$('#personas').children].forEach((b, i) => b.setAttribute('aria-pressed', ORDER[i] === state.persona));
+  $('#personaBlurb').textContent = `${d.name}: ${d.blurb} ${d.N.toLocaleString()} switches across ${d.names.length} tabs over ${fmtDur(d.hours * 3600)}.`;
+  $('#dataDot').classList.toggle('real', !d.synthetic);
+  $('#dataTxt').textContent = d.synthetic ? 'Synthetic traces from a seeded locality model' : `Your trace · ${d.N.toLocaleString()} switches`;
+  tl.start = null;
+  persist();
+  renderAll();
+  hero.reset();
+}
+
+/* ---------- KPIs + findings ---------- */
+function bestPractical(A, k) {
+  return PRACTICAL.map(a => ({ a, v: A.curves[a.id][k].hp })).sort((p, q) => p.v - q.v)[0];
+}
+function renderKpis() {
+  const d = D(), A = T.analyze(d), k = state.k;
+  const b = bestPractical(A, k), opt = A.curves.opt[k].hp;
+  const lruK = A.curves.lru[k];
+  const lost = lruK.faults * RELOAD_S / d.hours;
+  $('#kpis').innerHTML = `
+    <div class="kpi"><div class="eyebrow">Thrashing point</div><div class="v">${A.kneeK}<small>live tabs</small></div><div class="s">knee of the LRU curve · ${esc(d.name)}</div></div>
+    <div class="kpi"><div class="eyebrow">Best at k = ${k}</div><div class="v" style="color:${sc(b.a.id)}">${b.a.name}<small>${fmt1(b.v)} / 100</small></div><div class="s">OPT bound ${fmt1(opt)} / 100 switches</div></div>
+    <div class="kpi"><div class="eyebrow">Time lost to reloads</div><div class="v">${Math.round(lost)}<small>s / hour</small></div><div class="s">under LRU at ${k} live tabs</div></div>`;
+}
+
+function renderFindings() {
+  const d = D(), A = T.analyze(d);
+  const all = ORDER.map(id => ({ id, d: DATA[id], A: T.analyze(DATA[id]) }));
+  const synth = all.filter(x => x.d.synthetic);
+  // Q2: average rank at each persona's knee
+  const ranks = {};
+  for (const a of PRACTICAL) ranks[a.id] = [];
+  for (const x of all) {
+    const k = x.A.kneeK;
+    PRACTICAL.map(a => ({ id:a.id, v:x.A.curves[a.id][k].hp })).sort((p, q) => p.v - q.v).forEach((r, i) => ranks[r.id].push(i + 1));
+  }
+  const avgRank = PRACTICAL.map(a => ({ a, r: ranks[a.id].reduce((s, v) => s + v, 0) / ranks[a.id].length })).sort((p, q) => p.r - q.r);
+  const win = avgRank[0];
+  const kk = A.kneeK, gap = A.curves.lru[kk].hp / Math.max(A.curves.opt[kk].hp, 0.05);
+  const fifoAn = all.reduce((s, x) => s + x.A.anomalies.fifo, 0), clockAn = all.reduce((s, x) => s + x.A.anomalies.clock, 0);
+  const loc = A.locality4;
+  const locVerdict = loc >= 0.5 ? ['yes', 'Strong'] : loc >= 0.35 ? ['mixed', 'Partial'] : ['no', 'Weak'];
+  const knees = all.map(x => x.A.kneeK), spread = Math.max(...knees) - Math.min(...knees);
+  $('#qs').innerHTML = `
+    <article class="q"><div class="qn"><span>Q1 · locality</span><span class="pill ${locVerdict[0]}">${locVerdict[1]}</span></div>
+      <h3>Does tab use show locality of reference?</h3>
+      <div class="big">${Math.round(loc * 100)}%<small>of returns</small></div>
+      <p>of returns to a tab land on one of the 4 most recently used tabs. ${loc >= 0.5 ? 'Recency predicts the next switch well.' : 'Recency helps, but this user ranges widely.'}</p>
+      <div class="minirow">${all.map(x => `<span class="mini">${esc(x.d.name)} <b>${Math.round(x.A.locality4 * 100)}%</b></span>`).join('')}</div></article>
+    <article class="q"><div class="qn"><span>Q2 · best policy</span><span class="pill yes">${win.a.name}</span></div>
+      <h3>Which policy predicts the next tab best?</h3>
+      <div class="big" style="color:${sc(win.a.id)}">${win.a.name}<small>avg rank ${win.r.toFixed(1)}</small></div>
+      <p>Ranked at each persona's own thrashing point. LRU still makes ${gap.toFixed(1)}× OPT's refaults for ${esc(d.name)}, so a smarter policy has room to win.</p>
+      <div class="minirow">${avgRank.slice(1, 4).map(x => `<span class="mini">${x.a.name} <b>${x.r.toFixed(1)}</b></span>`).join('')}</div></article>
+    <article class="q"><div class="qn"><span>Q3 · thrashing point</span><span class="pill ${spread >= 3 ? 'yes' : 'mixed'}">${spread >= 3 ? 'Varies' : 'Similar'}</span></div>
+      <h3>Is there a tab count where reloads explode?</h3>
+      <div class="big">${A.kneeK}<small>live tabs</small></div>
+      <p>for ${esc(d.name)}. Knees differ by ${spread} tab${spread === 1 ? '' : 's'} across personas, so one global discard limit fits nobody well.</p>
+      <div class="minirow">${all.map(x => `<span class="mini">${esc(x.d.name)} <b>${x.A.kneeK}</b></span>`).join('')}</div></article>
+    <article class="q"><div class="qn"><span>Q4 · Belady</span><span class="pill ${fifoAn + clockAn ? 'yes' : 'no'}">${fifoAn + clockAn ? 'Observed' : 'Not seen'}</span></div>
+      <h3>Can adding a live tab cause more reloads?</h3>
+      <div class="big">${fifoAn + clockAn}<small>anomalies</small></div>
+      <p>FIFO ${fifoAn} and Clock ${clockAn} times, summed over all ${all.length} traces between k = 1 and 32. LRU and OPT: never, as stack algorithms must.</p>
+      <div class="minirow"><span class="mini">traces <b>${synth.length} synthetic${all.length > synth.length ? ' + yours' : ''}</b></span></div></article>`;
+}
+
+/* ---------- fault curves ---------- */
+function renderLegend() {
+  const box = $('#legend'); box.innerHTML = '';
+  const items = [...ALGOS.map(a => ({ id:a.id, name:a.name, color:sc(a.id), dash:a.dash })), { id:'ws', name:'Working set (variable)', color:'var(--s-ws)', dash:'1' }];
+  for (const it of items) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'lg'; b.setAttribute('aria-pressed', !state.hidden.has(it.id));
+    b.innerHTML = `<i style="background:${it.color}"></i>${it.name}`;
+    b.onclick = () => { state.hidden.has(it.id) ? state.hidden.delete(it.id) : state.hidden.add(it.id); renderLegend(); renderCurve(); };
+    box.appendChild(b);
+  }
+}
+function renderCurve() {
+  const d = D(), A = T.analyze(d), K = d.K, el = $('#curveChart');
+  const vis = ALGOS.filter(a => !state.hidden.has(a.id));
+  let ymax = 0;
+  for (const a of vis) for (let k = 2; k <= K; k++) ymax = Math.max(ymax, A.curves[a.id][k].hp);
+  if (!state.hidden.has('ws')) for (const w of A.ws) if (w.meanW >= 2 && w.meanW <= K) ymax = Math.max(ymax, w.hp);
+  ymax = Math.max(5, ymax);
+  const yt = niceTicks(0, ymax * 1.04, 5); const ytop = yt[yt.length - 1] < ymax ? ymax * 1.05 : yt[yt.length - 1];
+  const narrow = el.clientWidth < 560;
+  const c = axes(el, { h: narrow ? 300 : 400, m:{ l:44, r:18, t:30, b:34 }, xd:[1, K], yd:[0, ytop], yt, xt: niceTicks(1, K, narrow ? 5 : 10).filter(v => v >= 1), yl:'REFAULTS PER 100 SWITCHES', xl:'LIVE TABS (FRAMES) k →', label:'Refault rate by number of live tabs' });
+  const g = S('g', {}, c.svg);
+  // thrashing zone shading left of knee
+  const kx = c.x(A.kneeK);
+  S('rect', { x:c.m.l, y:c.m.t, width:Math.max(0, kx - c.m.l), height:c.ph, style:'fill:var(--fault-soft);opacity:.55' }, g);
+  S('text', { x:c.m.l + 8, y:c.m.t + 16, style:'fill:var(--fault);font-family:var(--f-mono);font-size:10.5px;letter-spacing:.08em' }, g).textContent = 'THRASHING ZONE';
+  // working set
+  if (!state.hidden.has('ws')) {
+    const pts = A.ws.filter(w => w.meanW >= 1 && w.meanW <= K).map(w => [c.x(w.meanW), c.y(Math.min(w.hp, ytop))]);
+    S('path', { d:pathOf(pts), class:'series', style:'stroke:var(--s-ws);stroke-dasharray:1 5;stroke-width:2.6' }, g);
+    for (const p of pts) S('circle', { cx:p[0], cy:p[1], r:3, style:'fill:var(--surface);stroke:var(--s-ws);stroke-width:1.6' }, g);
+  }
+  // series (draw selected algo last)
+  const order = [...vis].sort((a, b) => (a.id === state.algo) - (b.id === state.algo));
+  for (const a of order) {
+    const pts = []; for (let k = 1; k <= K; k++) pts.push([c.x(k), c.y(Math.min(A.curves[a.id][k].hp, ytop))]);
+    S('path', { d:pathOf(pts), class:'series', style:`stroke:${sc(a.id)};${a.dash ? 'stroke-dasharray:' + a.dash + ';' : ''}stroke-width:${a.id === state.algo ? 3.2 : 2}` }, g);
+  }
+  // knee marker
+  if (!state.hidden.has('lru')) {
+    const ky = c.y(A.curves.lru[A.kneeK].hp);
+    S('line', { x1:kx, x2:kx, y1:c.m.t, y2:c.m.t + c.ph, style:'stroke:var(--fault);stroke-dasharray:3 3' }, g);
+    S('circle', { cx:kx, cy:ky, r:6, style:'fill:var(--surface);stroke:var(--fault);stroke-width:2.5' }, g);
+    const lab = S('text', { x:kx + 10, y:ky - 12, style:'fill:var(--ink);font-family:var(--f-display);font-weight:700;font-size:13px' }, g);
+    lab.textContent = `Thrashing point · k = ${A.kneeK}`;
+    if (kx + 190 > c.W) { lab.setAttribute('text-anchor', 'end'); lab.setAttribute('x', kx - 10); }
+  }
+  // current k
+  const cx0 = c.x(state.k);
+  S('line', { x1:cx0, x2:cx0, y1:c.m.t, y2:c.m.t + c.ph, style:'stroke:var(--accent);stroke-width:1.5' }, g);
+  const kl = S('text', { x:cx0, y:c.m.t - 10, 'text-anchor':'middle', style:'fill:var(--accent);font-family:var(--f-mono);font-size:11px;font-weight:700' }, g);
+  kl.textContent = `k = ${state.k}`;
+  if (cx0 < c.m.l + 40) kl.setAttribute('text-anchor', 'start');
+  // hover
+  const guide = S('line', { y1:c.m.t, y2:c.m.t + c.ph, style:'stroke:var(--faint);opacity:0' }, g);
+  const dots = S('g', {}, g);
+  const hit = S('rect', { x:c.m.l, y:c.m.t, width:c.pw, height:c.ph, style:'fill:transparent;cursor:crosshair' }, c.svg);
+  const move = ev => {
+    const r = c.svg.getBoundingClientRect(), px = (ev.clientX - r.left) * (c.W / r.width);
+    const k = Math.max(1, Math.min(K, Math.round(1 + (px - c.m.l) / c.pw * (K - 1))));
+    const gx = c.x(k);
+    guide.setAttribute('x1', gx); guide.setAttribute('x2', gx); guide.style.opacity = 1;
+    dots.innerHTML = '';
+    const rows = vis.map(a => ({ a, v:A.curves[a.id][k].hp })).sort((p, q) => p.v - q.v);
+    for (const rw of rows) S('circle', { cx:gx, cy:c.y(Math.min(rw.v, ytop)), r:3.5, style:`fill:${sc(rw.a.id)};stroke:var(--surface);stroke-width:1.5` }, dots);
+    showTip(`<div class="tt">${k} live tab${k > 1 ? 's' : ''}${k === A.kneeK ? ' · thrashing point' : ''}</div>` + rows.map(rw => `<div class="tr"><span><i style="background:${sc(rw.a.id)}"></i>${rw.a.name}</span><span>${fmt1(rw.v)}</span></div>`).join(''), ev.clientX, ev.clientY);
+  };
+  hit.addEventListener('pointermove', move);
+  hit.addEventListener('pointerleave', () => { guide.style.opacity = 0; dots.innerHTML = ''; hideTip(); });
+  hit.addEventListener('click', ev => { const r = c.svg.getBoundingClientRect(), px = (ev.clientX - r.left) * (c.W / r.width); state.k = Math.max(1, Math.min(K, Math.round(1 + (px - c.m.l) / c.pw * (K - 1)))); kSlider.value = state.k; kOut.textContent = state.k; persist(); renderDynamic(); hero.reset(); });
+  const l = A.curves.lru, o = A.curves.opt;
+  $('#curveNote').textContent = `${d.name}: going from ${Math.max(1, A.kneeK - 3)} to ${A.kneeK} live tabs cuts LRU refaults from ${fmt1(l[Math.max(1, A.kneeK - 3)].hp)} to ${fmt1(l[A.kneeK].hp)} per 100 switches. Going from ${A.kneeK} to ${Math.min(K, A.kneeK * 2)} only reaches ${fmt1(l[Math.min(K, A.kneeK * 2)].hp)}. OPT reaches ${fmt1(o[A.kneeK].hp)} at the knee. Click the chart to set k.`;
+}
+
+/* ---------- leaderboard ---------- */
+function spark(a, A, K, k) {
+  const w = 96, h = 26; let mx = 0; for (let j = 1; j <= K; j++) mx = Math.max(mx, A.curves[a.id][j].hp);
+  const X = j => 2 + (j - 1) / (K - 1) * (w - 4), Y = v => 2 + (1 - v / (mx || 1)) * (h - 4);
+  let p = ''; for (let j = 1; j <= K; j++) p += (j > 1 ? 'L' : 'M') + X(j).toFixed(1) + ',' + Y(A.curves[a.id][j].hp).toFixed(1);
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="vertical-align:middle"><path d="${p}" style="fill:none;stroke:${sc(a.id)};stroke-width:1.6"/><circle cx="${X(k)}" cy="${Y(A.curves[a.id][k].hp)}" r="2.8" style="fill:${sc(a.id)}"/></svg>`;
+}
+function renderBoard() {
+  const d = D(), A = T.analyze(d), k = state.k, K = d.K;
+  $('#boardK').textContent = k;
+  const opt = A.curves.opt[k].hp;
+  const rows = ALGOS.map(a => ({ a, c:A.curves[a.id][k] })).sort((p, q) => p.c.hp - q.c.hp);
+  const mx = Math.max(...rows.map(r => r.c.hp)) || 1;
+  const meanOpen = d.openN.reduce((s, v) => s + v, 0) / d.N;
+  let rank = 0;
+  $('#boardTbl').innerHTML = `<thead><tr><th>#</th><th>Policy</th><th>Refaults / 100</th><th>× OPT</th><th>Reloads / h</th><th>Time lost / h</th><th>Memory freed</th><th>Curve k = 1…${K}</th></tr></thead><tbody>` +
+    rows.map(r => {
+      const isOpt = r.a.id === 'opt'; if (!isOpt) rank++;
+      const freed = Math.max(0, meanOpen - r.c.res) * TAB_MB / 1024;
+      return `<tr${r.a.id === state.algo ? ' style="background:var(--accent-soft)"' : ''}>
+        <td>${isOpt ? '—' : rank}</td>
+        <td><div class="pol"><i style="background:${sc(r.a.id)}"></i><div><b>${r.a.name}</b><span>${r.a.full}${isOpt ? ' · lower bound' : ''}</span></div></div></td>
+        <td>${fmt1(r.c.hp)}<span class="bar" style="width:${Math.round(r.c.hp / mx * 56)}px;background:${sc(r.a.id)}"></span></td>
+        <td>${isOpt ? '1.0' : (r.c.hp / Math.max(opt, 0.05)).toFixed(1)}</td>
+        <td>${fmt1(r.c.faults / d.hours)}</td>
+        <td>${Math.round(r.c.faults * RELOAD_S / d.hours)} s</td>
+        <td>${freed.toFixed(1)} GB</td>
+        <td>${spark(r.a, A, K, k)}</td></tr>`;
+    }).join('') + '</tbody>';
+  // matrix
+  const cols = ORDER;
+  const m = $('#matrix');
+  m.style.gridTemplateColumns = `minmax(64px,1.1fr) repeat(${cols.length},minmax(0,1fr))`;
+  let html = '<div class="h"></div>' + cols.map(id => `<div class="h">${esc(DATA[id].name)}</div>`).join('');
+  const rk = {};
+  for (const id of cols) {
+    const AA = T.analyze(DATA[id]), kk = AA.kneeK;
+    PRACTICAL.map(a => ({ id:a.id, v:AA.curves[a.id][kk].hp })).sort((p, q) => p.v - q.v).forEach((r, i) => { (rk[r.id] = rk[r.id] || {})[id] = { i:i + 1, v:r.v }; });
+  }
+  for (const a of PRACTICAL) {
+    html += `<div class="rh"><i style="background:${sc(a.id)}"></i>${a.name}</div>`;
+    for (const id of cols) {
+      const r = rk[a.id][id], t = (r.i - 1) / (PRACTICAL.length - 1);
+      const bg = `color-mix(in srgb, var(--hit) ${Math.round((1 - t) * 34)}%, color-mix(in srgb, var(--fault) ${Math.round(t * 30)}%, var(--sunk)))`;
+      html += `<div class="c" style="background:${bg}" title="${a.name} on ${esc(DATA[id].name)}: ${fmt1(r.v)} refaults per 100 switches"><b>${r.i}</b> <span style="color:var(--muted);font-size:10.5px">${fmt1(r.v)}</span></div>`;
+    }
+  }
+  m.innerHTML = html;
+}
+
+/* ---------- timeline ---------- */
+const tl = { rec:null, key:'', start:null, win:160 };
+function getRec() {
+  const d = D(), key = `${state.persona}|${state.k}|${state.algo}`;
+  if (tl.key !== key) { tl.rec = T.record(d, state.k, state.algo); tl.key = key; }
+  return tl.rec;
+}
+function renderTimeline() {
+  readTheme();
+  const d = D(), rec = getRec(), k = state.k, cv = $('#tl');
+  const W = Math.max(300, cv.parentElement.clientWidth - 36);
+  const lane = 22, gutter = 34;
+  const rowH = Math.max(5, Math.min(22, Math.floor(300 / k)));
+  const H = lane + k * rowH + 22;
+  const plotW = W - gutter;
+  tl.win = Math.max(40, Math.min(220, Math.floor(plotW / 6)));
+  if (tl.start === null) tl.start = Math.min(Math.max(0, d.N - tl.win), Math.floor(d.N * 0.35));
+  tl.start = Math.max(0, Math.min(d.N - tl.win, tl.start));
+  const cw = plotW / tl.win;
+  const ctx = setupCanvas(cv, W, H);
+  ctx.font = `10px ${getComputedStyle(document.body).getPropertyValue('--f-mono') || 'monospace'}`;
+  ctx.fillStyle = TC.faint; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  if (rowH >= 11) for (let s = 0; s < k; s++) ctx.fillText('f' + s, gutter - 8, lane + s * rowH + rowH / 2);
+  ctx.fillText('flt', gutter - 8, lane / 2);
+  for (let j = 0; j < tl.win; j++) {
+    const i = tl.start + j, x = gutter + j * cw;
+    for (let s = 0; s < k; s++) {
+      const tab = rec.frames[i * k + s];
+      if (tab < 0) { ctx.fillStyle = TC.sunk; } else ctx.fillStyle = tabColor(tab, 0.9);
+      ctx.fillRect(x + 0.5, lane + s * rowH + 0.5, Math.max(1, cw - 1), rowH - 1);
+    }
+    const kd = rec.kind[i];
+    if (kd === 1) {
+      ctx.fillStyle = TC.fault; ctx.fillRect(x + 0.5, 3, Math.max(1.5, cw - 1), lane - 7);
+    } else if (kd === 2) {
+      ctx.fillStyle = TC.faint; ctx.fillRect(x + 0.5, lane - 10, Math.max(1.5, cw - 1), 6);
+    }
+    if (kd) {
+      ctx.strokeStyle = TC.ink; ctx.lineWidth = 1.5;
+      ctx.strokeRect(x + 1.25, lane + rec.slot[i] * rowH + 1.25, Math.max(1, cw - 2.5), rowH - 2.5);
+    }
+  }
+  // time axis
+  ctx.fillStyle = TC.muted; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  const t0 = d.times[0];
+  const every = Math.max(1, Math.ceil(tl.win / Math.max(2, Math.floor(plotW / 140))));
+  for (let j = 0; j < tl.win - every / 2; j += every) {
+    const i = tl.start + j;
+    ctx.fillText(`#${i + 1} · ${fmtDur(d.times[i] - t0)}`, gutter + j * cw, H - 5);
+  }
+  let f = 0, c = 0; for (let j = 0; j < tl.win; j++) { const kd = rec.kind[tl.start + j]; if (kd === 1) f++; else if (kd === 2) c++; }
+  $('#tlTitle').textContent = `${AL[state.algo].name} · ${AL[state.algo].full}`;
+  $('#tlSub').textContent = `switches ${tl.start + 1}–${tl.start + tl.win} of ${d.N} · ${f} refaults, ${c} first visits in view · ${AL[state.algo].note}`;
+  cv._geo = { gutter, lane, rowH, cw, k };
+  renderMini();
+}
+function renderMini() {
+  const d = D(), rec = getRec(), cv = $('#tlMini');
+  const W = Math.max(300, cv.parentElement.clientWidth - 36), H = 46, gutter = 34, pw = W - gutter;
+  const ctx = setupCanvas(cv, W, H);
+  const bins = Math.floor(pw / 3), per = d.N / bins, counts = new Array(bins).fill(0);
+  for (let i = 0; i < d.N; i++) if (rec.kind[i] === 1) counts[Math.min(bins - 1, Math.floor(i / per))]++;
+  const mx = Math.max(1, ...counts);
+  ctx.fillStyle = TC.sunk; ctx.fillRect(gutter, 0, pw, H);
+  ctx.fillStyle = TC.fault;
+  counts.forEach((v, b) => { const h = (v / mx) * (H - 8); ctx.globalAlpha = 0.35 + 0.65 * (v / mx); ctx.fillRect(gutter + b * 3, H - 4 - h, 2, h); });
+  ctx.globalAlpha = 1;
+  const bx = gutter + tl.start / d.N * pw, bw = Math.max(6, tl.win / d.N * pw);
+  ctx.strokeStyle = TC.ink; ctx.lineWidth = 1.5; ctx.strokeRect(bx + 0.75, 0.75, bw - 1.5, H - 1.5);
+  ctx.fillStyle = TC.accent; ctx.globalAlpha = 0.12; ctx.fillRect(bx, 0, bw, H); ctx.globalAlpha = 1;
+  ctx.fillStyle = TC.faint; ctx.font = '10px monospace'; ctx.textAlign = 'right'; ctx.fillText('all', gutter - 8, H / 2 + 3);
+  cv._geo = { gutter, pw };
+}
+(function bindTimeline() {
+  const cv = $('#tl'), mini = $('#tlMini');
+  cv.addEventListener('pointermove', ev => {
+    const g = cv._geo; if (!g) return;
+    const r = cv.getBoundingClientRect(), x = ev.clientX - r.left, y = ev.clientY - r.top;
+    const j = Math.floor((x - g.gutter) / g.cw), s = Math.floor((y - g.lane) / g.rowH);
+    if (j < 0 || j >= tl.win) return hideTip();
+    const d = D(), rec = getRec(), i = tl.start + j, kd = rec.kind[i];
+    const tag = kd === 1 ? '<span class="tag fault">REFAULT</span>' : kd === 2 ? '<span class="tag new">FIRST VISIT</span>' : '<span class="tag hit">HIT</span>';
+    let html = `<div class="tt">${tag}${esc(d.names[d.refs[i]])}</div><div class="tr"><span>switch</span><span>#${i + 1}</span></div><div class="tr"><span>session time</span><span>${fmtDur(d.times[i] - d.times[0])}</span></div>`;
+    if (kd && rec.ev[i] >= 0) html += `<div class="tr"><span>evicted</span><span>${esc(d.names[rec.ev[i]])}</span></div>`;
+    if (s >= 0 && s < g.k) { const tb = rec.frames[i * g.k + s]; html += `<div class="tr"><span>frame f${s}</span><span>${tb < 0 ? 'empty' : esc(d.names[tb])}</span></div>`; }
+    showTip(html, ev.clientX, ev.clientY);
+  });
+  cv.addEventListener('pointerleave', hideTip);
+  let drag = false;
+  const seek = ev => {
+    const g = mini._geo; if (!g) return;
+    const r = mini.getBoundingClientRect(), x = ev.clientX - r.left - g.gutter;
+    tl.start = Math.round(x / g.pw * D().N - tl.win / 2);
+    renderTimeline();
+  };
+  mini.addEventListener('pointerdown', ev => { drag = true; mini.setPointerCapture(ev.pointerId); mini.style.cursor = 'grabbing'; seek(ev); });
+  mini.addEventListener('pointermove', ev => { if (drag) seek(ev); });
+  mini.addEventListener('pointerup', () => { drag = false; mini.style.cursor = 'grab'; });
+  cv.addEventListener('wheel', ev => { if (Math.abs(ev.deltaX) > Math.abs(ev.deltaY) || ev.shiftKey) { ev.preventDefault(); tl.start += Math.round((ev.deltaX || ev.deltaY) / 8); renderTimeline(); } }, { passive:false });
+})();
+
+/* ---------- working set ---------- */
+function renderWS() {
+  const d = D(), el = $('#wsChart'), k = state.k;
+  const res = T.workingSet(d, state.delta, true), W = res.W;
+  const narrow = el.clientWidth < 560;
+  let ymax = 0; for (let i = 0; i < d.N; i++) ymax = Math.max(ymax, W[i], d.openN[i]);
+  const capOpen = Math.max(...Array.from(W)) * 1.6 + 4;
+  const ytop = Math.max(k + 2, Math.min(ymax, capOpen));
+  const c = axes(el, { h: narrow ? 260 : 320, m:{ l:44, r:18, t:30, b:34 }, xd:[0, d.N - 1], yd:[0, ytop * 1.05], yt:niceTicks(0, ytop, 5), xt:niceTicks(0, d.N - 1, narrow ? 4 : 8), xf:v => fmtDur(d.times[Math.min(d.N - 1, Math.round(v))] - d.times[0]), yl:'TABS', xl:'SESSION TIME →', label:'Working set size over time' });
+  const g = S('g', {}, c.svg);
+  const bins = Math.min(d.N, Math.floor(c.pw / 2)), per = d.N / bins;
+  const wMax = [], oMean = [];
+  for (let b = 0; b < bins; b++) {
+    const a0 = Math.floor(b * per), a1 = Math.max(a0 + 1, Math.floor((b + 1) * per));
+    let wm = 0, os = 0; for (let i = a0; i < a1; i++) { wm = Math.max(wm, W[i]); os += d.openN[i]; }
+    wMax.push(wm); oMean.push(os / (a1 - a0));
+  }
+  const bx = b => c.x((b + 0.5) * per);
+  const cap = v => Math.min(v, ytop * 1.05);
+  // open tabs area
+  let p = `M${bx(0)},${c.y(0)}`; oMean.forEach((v, b) => p += `L${bx(b).toFixed(1)},${c.y(cap(v)).toFixed(1)}`); p += `L${bx(bins - 1)},${c.y(0)}Z`;
+  S('path', { d:p, style:'fill:var(--sunk);stroke:var(--line)' }, g);
+  // thrash zones
+  let thrashSteps = 0; for (let i = 0; i < d.N; i++) if (W[i] > k) thrashSteps++;
+  let runStart = -1;
+  for (let b = 0; b <= bins; b++) {
+    const on = b < bins && wMax[b] > k;
+    if (on && runStart < 0) runStart = b;
+    if (!on && runStart >= 0) {
+      const x0 = c.x(runStart * per), x1 = c.x(Math.min(d.N - 1, b * per));
+      S('rect', { x:x0, y:c.m.t, width:Math.max(1, x1 - x0), height:c.ph, style:'fill:var(--fault-soft)' }, g);
+      runStart = -1;
+    }
+  }
+  // k line
+  S('line', { x1:c.m.l, x2:c.W - c.m.r, y1:c.y(k), y2:c.y(k), style:'stroke:var(--accent);stroke-width:1.6;stroke-dasharray:6 4' }, g);
+  S('text', { x:c.W - c.m.r - 4, y:c.y(k) - 6, 'text-anchor':'end', style:'fill:var(--accent);font-family:var(--f-mono);font-size:11px;font-weight:700' }, g).textContent = `k = ${k}`;
+  // W line
+  let wp = ''; wMax.forEach((v, b) => wp += (b ? 'L' : 'M') + bx(b).toFixed(1) + ',' + c.y(cap(v)).toFixed(1));
+  S('path', { d:wp, class:'series', style:'stroke:var(--s-ws);stroke-width:1.8' }, g);
+  const share = thrashSteps / d.N;
+  S('text', { x:c.m.l + 8, y:c.m.t + 16, style:'fill:var(--ink);font-family:var(--f-display);font-weight:700;font-size:13px' }, g).textContent = `${Math.round(share * 100)}% of the session above budget`;
+  S('text', { x:c.m.l + 8, y:c.m.t + 32, style:'fill:var(--muted);font-family:var(--f-mono);font-size:11px' }, g).textContent = `mean W = ${fmt1(res.meanW)} tabs · working-set policy: ${fmt1(res.hp)} refaults / 100`;
+  const hit = S('rect', { x:c.m.l, y:c.m.t, width:c.pw, height:c.ph, style:'fill:transparent' }, c.svg);
+  hit.addEventListener('pointermove', ev => {
+    const r = c.svg.getBoundingClientRect(), px = (ev.clientX - r.left) * (c.W / r.width);
+    const i = Math.max(0, Math.min(d.N - 1, Math.round((px - c.m.l) / c.pw * (d.N - 1))));
+    showTip(`<div class="tt">${fmtDur(d.times[i] - d.times[0])} into the session</div><div class="tr"><span>working set</span><span>${W[i]}</span></div><div class="tr"><span>tabs open</span><span>${d.openN[i]}</span></div><div class="tr"><span>budget k</span><span>${k}</span></div><div class="tr"><span>state</span><span style="color:${W[i] > k ? 'var(--fault)' : 'var(--hit)'}">${W[i] > k ? 'thrashing' : 'fits'}</span></div>`, ev.clientX, ev.clientY);
+  });
+  hit.addEventListener('pointerleave', hideTip);
+}
+
+/* ---------- locality ---------- */
+function renderRaster() {
+  readTheme();
+  const d = D(), rec = getRec(), cv = $('#raster');
+  const W = Math.max(280, cv.parentElement.clientWidth - 36);
+  const nT = d.names.length;
+  const rowH = Math.max(1.2, Math.min(4, 300 / nT));
+  const H = Math.round(nT * rowH + 24);
+  const ctx = setupCanvas(cv, W, H);
+  ctx.fillStyle = TC.sunk; ctx.fillRect(0, 0, W, nT * rowH);
+  const sx = (W - 4) / d.N;
+  for (let i = 0; i < d.N; i++) {
+    const t = d.refs[i];
+    ctx.fillStyle = tabColor(t, 0.95);
+    ctx.fillRect(2 + i * sx, t * rowH, Math.max(1.4, sx), Math.max(1.2, rowH));
+  }
+  ctx.fillStyle = TC.fault;
+  for (let i = 0; i < d.N; i++) if (rec.kind[i] === 1) {
+    ctx.beginPath(); ctx.arc(2 + i * sx + sx / 2, d.refs[i] * rowH + rowH / 2, 1.7, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.fillStyle = TC.muted; ctx.font = '10.5px monospace'; ctx.textAlign = 'left';
+  ctx.fillText(`${nT} tabs · ${d.N} switches`, 2, H - 6);
+  ctx.textAlign = 'right'; ctx.fillText(`${AL[state.algo].name}, k = ${state.k}: ${rec.faults} refaults`, W - 2, H - 6);
+  cv._geo = { sx, rowH, nT };
+}
+$('#raster').addEventListener('pointermove', ev => {
+  const cv = $('#raster'), g = cv._geo; if (!g) return;
+  const r = cv.getBoundingClientRect(), i = Math.floor((ev.clientX - r.left - 2) / g.sx), t = Math.floor((ev.clientY - r.top) / g.rowH);
+  const d = D();
+  if (t < 0 || t >= g.nT || i < 0 || i >= d.N) return hideTip();
+  let visits = 0; for (let j = 0; j < d.N; j++) if (d.refs[j] === t) visits++;
+  showTip(`<div class="tt"><i style="background:${tabColor(t)}"></i>${esc(d.names[t])}</div><div class="tr"><span>visits</span><span>${visits}</span></div><div class="tr"><span>at time</span><span>${fmtDur(d.times[i] - d.times[0])}</span></div>`, ev.clientX, ev.clientY);
+});
+$('#raster').addEventListener('pointerleave', hideTip);
+
+function renderHist() {
+  const d = D(), A = T.analyze(d), el = $('#histChart'), K = d.K;
+  const maxD = 20, bins = new Array(maxD + 2).fill(0); // 1..20, 21 = 21+
+  for (let i = 0; i < d.N; i++) { const v = A.dist[i]; if (v === Infinity) continue; bins[Math.min(maxD + 1, v)]++; }
+  const reuse = A.reuse || 1;
+  const share = bins.map(v => v / reuse * 100);
+  const ymax = Math.max(...share.slice(1)) * 1.1;
+  const narrow = el.clientWidth < 460;
+  const c = axes(el, { h: narrow ? 260 : 300, m:{ l:40, r:44, t:30, b:34 }, xd:[0.5, maxD + 1.5], yd:[0, ymax], yt:niceTicks(0, ymax, 4), xt:[1, 5, 10, 15, 20, 21], xf:v => v === 21 ? '21+' : String(v), yf:v => v + '%', yl:'SHARE OF RETURNS', xl:'DISTINCT TABS SINCE LAST VISIT →', label:'Stack distance histogram' });
+  const g = S('g', {}, c.svg);
+  const bw = c.pw / (maxD + 1) * 0.72;
+  for (let v = 1; v <= maxD + 1; v++) {
+    const on = v <= state.k;
+    S('rect', { x:c.x(v) - bw / 2, y:c.y(share[v]), width:bw, height:c.y(0) - c.y(share[v]), rx:2, style:`fill:${on ? 'var(--accent)' : 'var(--faint)'};opacity:${on ? .9 : .45}` }, g);
+  }
+  // cumulative on right axis 0..100
+  const yR = v => c.m.t + c.ph - v / 100 * c.ph;
+  let cum = 0, pts = [];
+  for (let v = 1; v <= maxD + 1; v++) { cum += share[v]; pts.push([c.x(v), yR(cum)]); }
+  S('path', { d:pathOf(pts), class:'series', style:'stroke:var(--s-ws);stroke-width:2.2' }, g);
+  for (const t of [0, 50, 100]) S('text', { x:c.W - c.m.r + 6, y:yR(t) + 4, style:'fill:var(--s-ws);font-family:var(--f-mono);font-size:11px' }, g).textContent = t + '%';
+  const kv = Math.min(state.k, maxD + 1);
+  let ck = 0; for (let v = 1; v <= kv; v++) ck += share[v];
+  S('circle', { cx:c.x(kv), cy:yR(ck), r:5, style:'fill:var(--surface);stroke:var(--s-ws);stroke-width:2.2' }, g);
+  const t = S('text', { x:c.x(kv) + 9, y:yR(ck) + 16, style:'fill:var(--ink);font-family:var(--f-mono);font-size:11px;font-weight:700' }, g);
+  t.textContent = `${fmt1(ck)}% hit at k = ${state.k}`;
+  if (c.x(kv) > c.W * 0.6) { t.setAttribute('text-anchor', 'end'); t.setAttribute('x', c.x(kv) - 9); }
+}
+
+/* ---------- Belady ---------- */
+function beladyGrid(refs, k) {
+  const P = T.prepare('belady', refs.map((r, i) => ({ t:i, type:'activate', tab:r })), null);
+  const pg = new T.Pager(P, k, 'fifo');
+  const cols = []; let faults = 0;
+  for (let i = 0; i < P.N; i++) { const r = pg.step(); if (r.kind) faults++; cols.push({ slots:Array.from(pg.slots), kind:r.kind, slot:r.slot }); }
+  let h = `<table class="bgrid" aria-label="FIFO with ${k} frames"><tr><th></th>${refs.map(r => `<th>${r}</th>`).join('')}</tr>`;
+  for (let s = 0; s < k; s++) {
+    h += `<tr><th>f${s}</th>` + cols.map(c => { const v = c.slots[s]; const lbl = v < 0 ? '' : P.names[v].replace('Tab ', ''); const cls = c.kind && c.slot === s ? 'flt' : v >= 0 ? 'ld' : ''; return `<td class="${cls}">${v < 0 ? '' : refs[refs.findIndex((_, i) => P.refs[i] === v)]}</td>`; }).join('') + '</tr>';
+  }
+  h += `<tr class="fr"><th></th>${cols.map(c => `<td>${c.kind ? '●' : ''}</td>`).join('')}</tr></table>`;
+  return { html:h, faults };
+}
+function renderBelady() {
+  const refs = [1, 2, 3, 4, 1, 2, 5, 1, 2, 3, 4, 5];
+  const a = beladyGrid(refs, 3), b = beladyGrid(refs, 4);
+  $('#belGrids').innerHTML = `
+    <div class="panel-h"><h3>FIFO on 1 2 3 4 1 2 5 1 2 3 4 5</h3><span class="sub">red cells: the frame loaded on a fault</span></div>
+    <div style="display:grid;gap:18px">
+      <div><div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px"><span class="bel-n">${a.faults}</span><span class="eyebrow">faults with 3 frames</span></div>${a.html}</div>
+      <div><div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px"><span class="bel-n" style="color:var(--fault)">${b.faults}</span><span class="eyebrow">faults with 4 frames, one more fault with more memory</span></div>${b.html}</div>
+    </div>`;
+  const cols = ORDER;
+  let h = `<thead><tr><th>Policy</th>${cols.map(id => `<th>${esc(DATA[id].name)}</th>`).join('')}<th>Total</th></tr></thead><tbody>`;
+  for (const al of ALGOS) {
+    let tot = 0;
+    const cells = cols.map(id => { const n = T.analyze(DATA[id]).anomalies[al.id]; tot += n; return `<td style="${n ? 'color:var(--fault);font-weight:700' : 'color:var(--faint)'}">${n}</td>`; }).join('');
+    h += `<tr><td><span class="pol"><i style="background:${sc(al.id)};height:14px"></i>${al.name}${al.id === 'lru' || al.id === 'opt' ? ' <span style="font-size:11px;color:var(--muted)">stack</span>' : ''}</span></td>${cells}<td style="font-weight:700">${tot}</td></tr>`;
+  }
+  $('#anomTbl').innerHTML = h + '</tbody>';
+}
+
+/* ---------- hero machine ---------- */
+const hero = (function () {
+  const fr = $('#frames'), tape = $('#tape');
+  let pg = null, timer = null, playing = true, k = 5, flash = null;
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduce) playing = false;
+  function meta(s) {
+    const tab = pg.slots[s]; if (tab < 0) return '';
+    switch (pg.algo) {
+      case 'lru': return `used ${pg.i - 1 - pg.last[s]} ago`;
+      case 'fifo': return `loaded ${pg.i - 1 - pg.loadT[s]} ago`;
+      case 'clock': return `ref bit ${pg.ref[s]}`;
+      case 'lfu': return `${pg.freq.get(tab)} visits`;
+      case 'opt': return pg.nextAt[s] === Infinity ? 'never again' : `next in ${pg.nextAt[s] - pg.i + 1}`;
+      default: return '';
+    }
+  }
+  function draw() {
+    const d = pg.D;
+    let h = '';
+    for (let s = 0; s < k; s++) {
+      const tab = pg.slots[s];
+      const cls = ['frame', tab < 0 ? 'empty' : '', flash && flash.slot === s ? (flash.kind === 0 ? 'hit' : 'fault') : '', pg.algo === 'clock' && pg.hand === s ? 'hand' : ''].join(' ');
+      h += `<li class="${cls}"><span class="ix">f${s}</span><span class="sw" style="background:${tab < 0 ? 'var(--sunk)' : tabColor(tab)}"></span><span class="lb">${tab < 0 ? 'empty' : esc(d.names[tab])}</span><span class="mt">${meta(s)}</span></li>`;
+    }
+    fr.innerHTML = h;
+    let tp = '';
+    for (let j = 0; j < 10 && pg.i + j < d.N; j++) { const t = d.refs[pg.i + j]; tp += `<span class="chip${j === 0 ? ' now' : ''}"><i style="background:${tabColor(t)}"></i>${esc(d.names[t])}</span>`; }
+    tape.innerHTML = tp;
+    const sw = pg.i - pg.base;
+    $('#cSw').textContent = sw; $('#cHit').textContent = pg.hits - pg.h0; $('#cFlt').textContent = pg.faults - pg.f0;
+    $('#cRate').textContent = sw ? fmt1((pg.faults - pg.f0) / sw * 100) : '0.0';
+  }
+  function step() {
+    const d = pg.D;
+    if (pg.i >= d.N) { reset(); return; }
+    const r = pg.step();
+    flash = r;
+    const nm = esc(d.names[r.tab]);
+    const ev = $('#mEvent');
+    if (r.kind === 0) ev.innerHTML = `<span class="tag hit">HIT</span><b>${nm}</b> is still live in f${r.slot}. No reload.`;
+    else if (r.kind === 2) ev.innerHTML = `<span class="tag new">FIRST VISIT</span><b>${nm}</b> opens into f${r.slot}${r.ev >= 0 ? `, discarding <b>${esc(d.names[r.ev])}</b>` : ''}. Compulsory, not counted.`;
+    else ev.innerHTML = `<span class="tag fault">REFAULT</span><b>${nm}</b> was discarded and reloads into f${r.slot}${r.ev >= 0 ? `, evicting <b>${esc(d.names[r.ev])}</b>` : ''}. ~${RELOAD_S}s lost.`;
+    draw();
+  }
+  function reset() {
+    readTheme();
+    k = Math.max(2, Math.min(8, state.k));
+    pg = new T.Pager(D(), k, state.algo);
+    const warm = Math.min(D().N - 20, 140);
+    for (let i = 0; i < warm; i++) pg.step();
+    pg.base = pg.i; pg.h0 = pg.hits; pg.f0 = pg.faults; flash = null;
+    $('#mAlgo').textContent = AL[state.algo].name; $('#mK').textContent = k;
+    $('#mEvent').innerHTML = `${AL[state.algo].note}${state.k > 8 ? ` Showing 8 of ${state.k} frames.` : ''}`;
+    draw();
+  }
+  function play(on) {
+    playing = on; $('#mPlay').textContent = on ? 'Pause' : 'Play';
+    clearInterval(timer); if (on) timer = setInterval(step, 900);
+  }
+  $('#mPlay').onclick = () => play(!playing);
+  $('#mStep').onclick = () => { play(false); step(); };
+  document.addEventListener('visibilitychange', () => { if (document.hidden) clearInterval(timer); else if (playing) play(true); });
+  return { reset, start: () => play(playing), redraw: () => pg && draw() };
+})();
+
+/* ---------- upload ---------- */
+$('#fileIn').addEventListener('change', async ev => {
+  const f = ev.target.files[0]; if (!f) return;
+  try {
+    const json = JSON.parse(await f.text());
+    const events = Array.isArray(json) ? json : json.events;
+    if (!Array.isArray(events)) throw new Error('No "events" array found.');
+    const t0 = events.find(e => typeof e.t === 'number')?.t || 0;
+    const norm = events.map(e => ({ ...e, t: typeof e.t === 'number' ? (e.t > 1e11 ? (e.t - t0) / 1000 : e.t - (t0 > 1e9 ? t0 : 0)) : undefined }));
+    const d = T.prepare('Your trace', norm, null);
+    if (d.N < 30) throw new Error(`Only ${d.N} tab switches found; at least 30 are needed.`);
+    d.blurb = `Loaded from ${f.name}.`; d.synthetic = false;
+    DATA.yours = d; if (!ORDER.includes('yours')) ORDER.push('yours');
+    state.persona = 'yours'; buildPersonaButtons(); onPersona();
+    toast(`Loaded ${d.N.toLocaleString()} switches across ${d.names.length} tabs`);
+  } catch (e) {
+    toast(`Could not read that file: ${e.message}`);
+  }
+  ev.target.value = '';
+});
+function toast(msg) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 3800); }
+
+/* ---------- orchestration ---------- */
+function renderDynamic() {
+  renderKpis(); renderFindings(); renderCurve(); renderBoard(); renderTimeline(); renderWS(); renderRaster(); renderHist();
+}
+function renderAll() { renderLegend(); renderDynamic(); renderBelady(); }
+
+readTheme();
+for (const id of ORDER) T.analyze(DATA[id]);
+buildPersonaButtons();
+onPersona();
+hero.start();
+
+let rt, lastW = 0;
+const ro = new ResizeObserver(es => { const w = Math.round(es[0].contentRect.width); if (w === lastW) return; lastW = w; clearTimeout(rt); rt = setTimeout(renderDynamic, 120); });
+ro.observe(document.querySelector('main'));
+const retheme = () => { readTheme(); renderDynamic(); hero.redraw(); };
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', retheme);
+new MutationObserver(retheme).observe(document.documentElement, { attributes:true, attributeFilter:['data-theme'] });
+})();
+</script>

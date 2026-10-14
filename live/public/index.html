@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tab Thrashing</title>
+<style>
+/* A system utility, not a landing page: native UI fonts, hairline rules, square panes, dense tables. */
+:root{
+  --bg:#EDEEF0; --pane:#FFFFFF; --sunk:#F5F6F7; --ink:#17191C; --dim:#5E636B; --faint:#8D929A; --rule:#D9DCE0; --rule2:#E8EAED;
+  --live:#1F5FD1; --live-bg:#E8EFFB; --fault:#C9252D; --fault-bg:#FBEAEA; --ok:#1B7A36; --warn:#946200; --sel:#DCE6F8;
+  --s-opt:#17191C; --s-lru:#1F5FD1; --s-clock:#0F7F79; --s-lfu:#7A3DC0; --s-fifo:#C25A00; --s-rand:#9298A1; --s-chrome:#C9252D;
+  --ui:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,"Helvetica Neue",sans-serif;
+  --mono:"Cascadia Mono","Cascadia Code",Consolas,"SFMono-Regular",ui-monospace,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){:root{
+  --bg:#0E0F11; --pane:#17181B; --sunk:#1D1F23; --ink:#E6E7E9; --dim:#A0A5AD; --faint:#6F747C; --rule:#2B2E33; --rule2:#24262A;
+  --live:#5B93FF; --live-bg:#1A2538; --fault:#FF6161; --fault-bg:#3A1C1E; --ok:#45C06A; --warn:#E0A43A; --sel:#22324D;
+  --s-opt:#E6E7E9; --s-lru:#5B93FF; --s-clock:#3CC2B8; --s-lfu:#B48CFF; --s-fifo:#F08A3C; --s-rand:#6F747C; --s-chrome:#FF6161;
+  color-scheme:dark;}}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:13px/1.45 var(--ui);-webkit-font-smoothing:antialiased}
+.num,.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+button,select,input{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--live);outline-offset:1px}
+a{color:var(--live)}
+
+/* title bar */
+.bar{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:8px 16px;background:var(--pane);border-bottom:1px solid var(--rule)}
+.app{display:flex;align-items:baseline;gap:10px;margin-right:auto}
+.app b{font-size:15px;font-weight:600;letter-spacing:-.005em}
+.app span{color:var(--dim);font-size:12px}
+.conn{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--dim)}
+.led{width:8px;height:8px;border-radius:50%;background:var(--faint)}
+.led.on{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 22%,transparent)}
+.led.bad{background:var(--fault)}
+.ctl{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ctl label{font-size:12px;color:var(--dim)}
+.stepper{display:inline-flex;border:1px solid var(--rule);border-radius:3px;overflow:hidden;background:var(--pane)}
+.stepper button{border:0;background:var(--sunk);width:24px;cursor:pointer}
+.stepper button:hover{background:var(--rule2)}
+.stepper input{width:38px;border:0;border-inline:1px solid var(--rule);text-align:center;background:var(--pane);font-family:var(--mono);padding:3px 0}
+select{border:1px solid var(--rule);border-radius:3px;background:var(--pane);padding:3px 6px}
+.btn{border:1px solid var(--rule);background:var(--pane);border-radius:3px;padding:3px 10px;cursor:pointer;text-decoration:none;color:var(--ink);font-size:12.5px;display:inline-block}
+.btn:hover{background:var(--sunk)}
+.btn.danger.armed{background:var(--fault);border-color:var(--fault);color:#fff}
+
+/* meters */
+.meters{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:1px;background:var(--rule);border-bottom:1px solid var(--rule)}
+.m{background:var(--pane);padding:9px 14px 10px;min-width:0}
+.m .l{font-size:11.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.m .v{font-family:var(--mono);font-size:19px;line-height:1.25;margin-top:2px;white-space:nowrap}
+.m .v small{font-size:12px;color:var(--dim)}
+.m .s{font-size:11.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gauge{height:4px;background:var(--rule2);margin-top:6px;position:relative}
+.gauge i{position:absolute;inset:0 auto 0 0;background:var(--live)}
+.gauge i.b{background:var(--fault);opacity:.85}
+
+/* panes */
+.grid{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(0,1fr);gap:1px;background:var(--rule)}
+.pane{background:var(--pane);min-width:0;display:flex;flex-direction:column}
+.pane.wide{grid-column:1/-1}
+.ph{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;padding:9px 14px;border-bottom:1px solid var(--rule2)}
+.ph h2{font-size:13px;font-weight:600;margin:0}
+.ph .d{color:var(--dim);font-size:12px}
+.ph .r{margin-left:auto;color:var(--dim);font-size:12px}
+.body{padding:10px 14px 14px;min-width:0}
+.scroll{overflow:auto}
+
+/* tab table */
+table.t{width:100%;border-collapse:collapse;font-size:12.5px}
+.t th{position:sticky;top:0;background:var(--pane);text-align:left;font-weight:500;color:var(--dim);padding:5px 8px;border-bottom:1px solid var(--rule);white-space:nowrap;z-index:1}
+.t td{padding:4px 8px;border-bottom:1px solid var(--rule2);white-space:nowrap}
+.t td.n,.t th.n{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+.t tr.out td{color:var(--dim)}
+.t tr.out .ttl{opacity:.8}
+.t tr.cur td{background:var(--sel)}
+.t tr.line td{padding:0;border-bottom:0;height:0}
+.t tr.line td div{border-top:2px solid var(--live);position:relative;height:0}
+.t tr.line td span{position:absolute;right:8px;top:-9px;background:var(--live);color:#fff;font-size:10.5px;padding:0 6px;font-family:var(--mono);line-height:16px}
+.ttl{display:flex;align-items:center;gap:8px;max-width:440px;overflow:hidden}
+.ttl img,.ttl .fi{width:16px;height:16px;flex:none}
+.ttl .fi{background:var(--rule2)}
+.ttl span{overflow:hidden;text-overflow:ellipsis}
+.host{color:var(--dim);font-family:var(--mono);font-size:12px;max-width:200px;overflow:hidden;text-overflow:ellipsis}
+.state{font-family:var(--mono);font-size:11.5px}
+.state.live{color:var(--live)}
+.state.disc{color:var(--fault)}
+.state.act{color:var(--ok)}
+.tabwrap{max-height:520px}
+
+/* log */
+.log{list-style:none;margin:0;padding:0;font-family:var(--mono);font-size:12px;max-height:520px;overflow:auto}
+.log li{display:grid;grid-template-columns:64px 66px minmax(0,1fr) auto;gap:10px;padding:3px 14px;border-bottom:1px solid var(--rule2);align-items:baseline}
+.log li.new{animation:flash 1.2s ease-out}
+@keyframes flash{from{background:var(--live-bg)}to{background:transparent}}
+.log .tm{color:var(--faint)}
+.log .k{color:var(--dim)}
+.log .w{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.log .w em{font-style:normal;color:var(--dim)}
+.tag{font-size:11px;padding:0 5px;border:1px solid var(--rule);color:var(--dim);white-space:nowrap}
+.tag.hit{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,var(--rule))}
+.tag.miss{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 40%,var(--rule))}
+.tag.fault{color:#fff;background:var(--fault);border-color:var(--fault)}
+.tag.disc{color:var(--fault);border-color:color-mix(in srgb,var(--fault) 45%,var(--rule))}
+
+/* charts */
+svg.c{display:block;width:100%;height:auto}
+.c text{fill:var(--dim);font-family:var(--mono);font-size:10.5px}
+.c .g{stroke:var(--rule2)}
+.c .ax{stroke:var(--rule)}
+.key{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--dim);margin-top:8px}
+.key span{display:inline-flex;align-items:center;gap:6px}
+.key i{width:14px;height:2px;display:inline-block}
+.key i.d{height:8px;width:8px;transform:rotate(45deg)}
+canvas{display:block;width:100%}
+.empty{color:var(--dim);font-size:12.5px;padding:22px 0;text-align:center}
+
+/* setup */
+.setup{padding:18px 14px;max-width:760px}
+.setup h3{font-size:14px;margin:0 0 4px}
+.setup p{margin:0 0 12px;color:var(--dim)}
+.setup ol{margin:0;padding-left:20px;display:grid;gap:10px}
+.setup code,.path{font-family:var(--mono);font-size:12px;background:var(--sunk);border:1px solid var(--rule2);padding:1px 5px}
+.path{display:flex;align-items:center;gap:8px;padding:6px 8px;margin-top:6px;word-break:break-all}
+.path span{flex:1}
+
+@media (max-width:1100px){.meters{grid-template-columns:repeat(3,minmax(0,1fr))}.grid{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:620px){.meters{grid-template-columns:repeat(2,minmax(0,1fr))}.bar{padding-inline:12px}.log li{grid-template-columns:56px minmax(0,1fr) auto}.log .k{display:none}}
+@media (prefers-reduced-motion:reduce){.log li.new{animation:none}}
+</style>
+</head>
+<body>
+<header class="bar">
+  <div class="app"><b>Tab Thrashing</b><span>browser tabs as virtual memory · this computer</span></div>
+  <div class="conn"><span class="led" id="led"></span><span id="connTxt">Connecting to server…</span></div>
+  <div class="ctl">
+    <label for="k">Live-tab budget k</label>
+    <span class="stepper"><button type="button" id="kDn" aria-label="Fewer live tabs">−</button><input id="k" type="text" inputmode="numeric" value="8" aria-label="Live-tab budget"><button type="button" id="kUp" aria-label="More live tabs">+</button></span>
+    <label for="algo">Policy</label>
+    <select id="algo"></select>
+    <a class="btn" href="/api/export" download>Export trace</a>
+    <button class="btn danger" type="button" id="clear">Clear</button>
+  </div>
+</header>
+
+<div class="meters" id="meters"></div>
+
+<main class="grid">
+  <section class="pane">
+    <div class="ph"><h2>Open tabs</h2><span class="d">most recently used first · blue line = budget k</span><span class="r" id="agree"></span></div>
+    <div class="scroll tabwrap" id="tabsBox"></div>
+  </section>
+  <section class="pane">
+    <div class="ph"><h2>Event log</h2><span class="d" id="logSub">hit/miss = LRU with k live tabs</span></div>
+    <ol class="log" id="log" aria-live="polite"></ol>
+  </section>
+
+  <section class="pane">
+    <div class="ph"><h2>Refault rate on your trace</h2><span class="d">reloads per 100 switches, first visits excluded</span><span class="r" id="kneeTxt"></span></div>
+    <div class="body"><div id="curve"></div><div class="key" id="curveKey"></div></div>
+  </section>
+  <section class="pane">
+    <div class="ph"><h2>Memory</h2><span class="d">last 30 minutes, sampled every 5 s</span></div>
+    <div class="body"><div id="mem"></div><div class="key"><span><i style="background:var(--live)"></i>system memory in use</span><span><i style="background:var(--fault)"></i>browser working set</span></div></div>
+  </section>
+
+  <section class="pane wide">
+    <div class="ph"><h2>Frame table</h2><span class="d" id="framesSub"></span></div>
+    <div class="body"><canvas id="frames" aria-label="Frames over recent switches"></canvas></div>
+  </section>
+
+  <section class="pane wide">
+    <div class="ph"><h2>Policies at k</h2><span class="d">every policy replayed on your own switches, compared with what your browser actually did</span></div>
+    <div class="scroll"><table class="t" id="pol"></table></div>
+  </section>
+</main>
+
+<script src="/core.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

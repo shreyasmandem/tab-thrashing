@@ -1,0 +1,11 @@
+# Your recorded tab events stay on your machine
+live/data/
+
+# Build and run outputs
+lab/dist/
+sim/samples/*.result.json
+sim/samples/*.csv
+node_modules/
+__pycache__/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Tab Thrashing",
+  "version": "2.0.0",
+  "description": "Streams tab switches, closes and browser discards to the Tab Thrashing dashboard on this computer.",
+  "permissions": ["tabs", "storage", "alarms"],
+  "host_permissions": ["http://127.0.0.1:4870/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "Tab Thrashing" }
+}

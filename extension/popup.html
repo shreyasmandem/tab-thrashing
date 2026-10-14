@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { --bg:#F4F5F7; --panel:#fff; --ink:#16181D; --dim:#60646C; --rule:#DADDE2; --ok:#1A7F37; --bad:#D1242F; color-scheme: light dark; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111214; --panel:#18191C; --ink:#E8E9EB; --dim:#9A9EA6; --rule:#2A2C31; --ok:#3FB950; --bad:#FF6B6B; } }
+  body { font: 13px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; width: 300px; margin: 0; background: var(--bg); color: var(--ink); }
+  header { padding: 12px 14px; border-bottom: 1px solid var(--rule); display: flex; justify-content: space-between; align-items: center; background: var(--panel); }
+  header b { font-weight: 600; }
+  .st { font-size: 12px; color: var(--dim); display: flex; align-items: center; gap: 6px; }
+  .st i { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); }
+  .st.on i { background: var(--ok); }
+  section { padding: 10px 14px; border-bottom: 1px solid var(--rule); }
+  label { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0; }
+  select, input { font: inherit; color: inherit; background: var(--panel); padding: 3px 6px; border: 1px solid var(--rule); border-radius: 3px; }
+  input { width: 56px; }
+  .hint { font-size: 12px; color: var(--dim); }
+  .row { padding: 10px 14px; }
+  button { width: 100%; font: inherit; padding: 7px; border-radius: 3px; border: 1px solid var(--ink); background: var(--ink); color: var(--bg); cursor: pointer; }
+  code { font-family: "Cascadia Mono", Consolas, monospace; font-size: 11.5px; }
+</style>
+</head>
+<body>
+  <header><b>Tab Thrashing</b><span class="st" id="st"><i></i><span id="stTxt">Checking…</span></span></header>
+  <section>
+    <div class="hint" id="queue"></div>
+  </section>
+  <section>
+    <label for="policy">Discard policy
+      <select id="policy"><option value="off">Browser default</option><option value="lru">LRU</option><option value="clock">Clock</option></select>
+    </label>
+    <label for="k">Live-tab budget <input type="number" id="k" min="2" max="64"></label>
+    <div class="hint">Only applies when a policy is chosen. Pinned and audible tabs are never discarded.</div>
+  </section>
+  <div class="row"><button id="open" type="button">Open dashboard</button></div>
+  <script src="popup.js"></script>
+</body>
+</html>
